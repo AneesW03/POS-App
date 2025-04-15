@@ -8,6 +8,8 @@ import { InvoiceItem } from '../../models/invoice_item';
 import { Invoice } from '../../models/invoice';
 import { BehaviorSubject, Observable } from 'rxjs';
 import { Toast } from '@capacitor/toast';
+import { frequency } from 'src/app/models/frequency';
+import { inventory } from 'src/app/models/inventory';
 
 @Injectable()
 export class StorageService {
@@ -38,38 +40,6 @@ export class StorageService {
         return this.isDatabaseReady.asObservable();
     }
 
-    // Adds a single customer
-    async addCustomer(customer: Customer) {
-        const sql = `INSERT INTO customers (id, areaNo, lastInvoiceDate, company, contact, email, phone, terms, type, addr1, addr2)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`;
-        await this.db.run(sql, [
-            customer.id,
-            customer.areaNo ?? 0,
-            customer.lastInvoiceDate,
-            customer.company,
-            customer.contact || null,
-            customer.email || null,
-            customer.phone,
-            customer.terms,
-            customer.type,
-            customer.addr1,
-            customer.addr2 || null
-        ]);
-        await this.loadData();
-    }
-
-    // Adds a list of customers
-    async addCustomers(customers: Customer[]) {
-        const sql = `INSERT OR IGNORE INTO customers (id, areaNo, lastInvoiceDate, company, contact, email, phone, terms, type, addr1, addr2)
-        VALUES `;
-
-        var values = customers.map(customer => `(${customer.id}, ${customer.areaNo}, '${customer.lastInvoiceDate.replace(/'/g, "''")}', '${customer.company.replace(/'/g, "''")}', '${customer.contact.replace(/'/g, "''")}', '${customer.email.replace(/'/g, "''")}', '${customer.phone.replace(/'/g, "''")}', '${customer.terms.replace(/'/g, "''")}', '${customer.type.replace(/'/g, "''")}', '${customer.addr1.replace(/'/g, "''")}', '${customer.addr2.replace(/'/g, "''")}')`).join(",\n");
-        values += ';';
-
-        await this.db.execute(sql + values);
-        await this.loadData();
-    }
-
     // Adds a single invoice item
     async addInvoiceItem(item: InvoiceItem) {
         const sql = `INSERT INTO invoiceitems (itemNo, numPerPack, orderNo, packs, partNo, quantity, returnsNo, price, vat, vatRate, discrepancies, discount, creditNotes)
@@ -82,7 +52,6 @@ export class StorageService {
             item.partNo,
             item.quantity,
             item.returnsNo,
-            item.price,
             item.price,
             item.vat,
             item.vatRate,
@@ -135,6 +104,34 @@ export class StorageService {
         await this.loadData();
     }
 
+    async addFrequency(freq: { item_number: number; frequency: number }[]) {
+        try {
+          //console.log('Starting frequency update for:', freq);
+      
+          for (const frequency of freq) {
+            console.log('Processing itemNo:', frequency.item_number);
+            const sql = `
+              INSERT INTO freq (itemNo, frequency)
+              VALUES (${frequency.item_number}, 1)
+              ON CONFLICT(itemNo) DO UPDATE 
+              SET frequency = frequency + 1;
+            `;
+            console.log('Executing SQL:', sql);
+            await this.db.execute(sql, true);
+            console.log('Query executed for itemNo:', frequency.item_number);
+          }
+      
+          console.log('All queries executed.');
+          await this.loadData();
+          console.log('Frequency update complete.');
+          return true; 
+        } catch (error) {
+          console.error('Error updating frequencies:', error);
+          throw error;
+        }
+      }
+      
+      
     // Adds a list of invoices
     async addInvoices(invoices: Invoice[]) {
         const sql = `INSERT INTO invoices (invoiceNo, orderNo, custNo, routeNo, standingDay, invoiceDate, generate, generalNote, custDiscount, taxRate, terms,
@@ -147,6 +144,20 @@ export class StorageService {
         await this.db.execute(sql + values);
         await this.loadData();
     }
+
+    async addSale(sales: { itemNo: number, orderNo: number, quantity: number }[]) {
+        if (sales.length === 0) return;
+      
+        const sql = `INSERT INTO inv (itemNo, orderNo, quantity) VALUES `;
+      
+        const values = sales.map(sale =>
+          `(${sale.itemNo}, ${sale.orderNo}, ${sale.quantity})`
+        ).join(",\n");
+      
+        await this.db.execute(sql + values + ';');
+      }
+      
+      
 
     // Gets all items on an invoice by order number
     async getInvoiceItems(orderNo: number) {
@@ -168,19 +179,9 @@ export class StorageService {
         }
     }
 
-    // Gets a customer by customer ID
-    async getCustomer(custNo: number) {
-        const result: Customer[] = (await this.db.query('SELECT * FROM customers WHERE id = ?', [custNo])).values as Customer[];
-        if (result.length > 0) {
-            return result;
-        } else {
-            return null;
-        }
-    }
-
-    // Gets a customer by invoice number
-    async getCustomerbyInvoice(invoiceNo: number) {
-        const result: Customer[] = (await this.db.query('SELECT c.* FROM customers c JOIN invoices i ON c.id = i.custNo WHERE i.invoiceNo = ?', [invoiceNo])).values as Customer[];
+    // used to pull all invoice records from database
+    async getAllInvoices(){
+        const result: Invoice[] = (await this.db.query('SELECT * FROM INVOICES')).values as Invoice[];
         if (result.length > 0) {
             return result;
         } else {
@@ -322,37 +323,37 @@ export class StorageService {
 
     // Loads Invoices Data into homePageList
     async loadHomePageData() {
-        const result = await this.db.query(`SELECT i.*, c.company FROM invoices i JOIN customers c ON i.custNo = c.id;`);
-        this.homePageList.next(result.values || []);
+        //const result = await this.db.query(`SELECT i.*, c.company FROM invoices i JOIN customers c ON i.custNo = c.id;`);
+        //this.homePageList.next(result.values || []);
     }
 
     // Loads Returns Data into returnsList
     async loadReturnsData() {
-        const result = (await this.db.query('SELECT inv.*, inv_item.* FROM invoices inv JOIN invoiceitems inv_item ON inv.orderNo = inv_item.orderNo WHERE inv_item.returnsNo > 0'))
-        const results = result.values
-        if (results != null) {
-            const grouped: any = {};
+        // const result = (await this.db.query('SELECT inv.*, inv_item.* FROM invoices inv JOIN invoiceitems inv_item ON inv.orderNo = inv_item.orderNo WHERE inv_item.returnsNo > 0'))
+        // const results = result.values
+        // if (results != null) {
+        //     const grouped: any = {};
 
-            results.forEach(row => {
-                const orderNo = row.orderNo;
-                if (!grouped[orderNo]) {
-                    grouped[orderNo] = {
-                        ...row,
-                        items: []
-                    };
-                }
-                grouped[orderNo].items.push({
-                    'itemNo': row.itemNo,
-                    'returnsNo': row.returnsNo,
-                    'discrepancies': row.discrepancies,
-                });
-            });
+        //     results.forEach(row => {
+        //         const orderNo = row.orderNo;
+        //         if (!grouped[orderNo]) {
+        //             grouped[orderNo] = {
+        //                 ...row,
+        //                 items: []
+        //             };
+        //         }
+        //         grouped[orderNo].items.push({
+        //             'itemNo': row.itemNo,
+        //             'returnsNo': row.returnsNo,
+        //             'discrepancies': row.discrepancies,
+        //         });
+        //     });
 
-            const groupedArr = Object.values(grouped);
-            this.returnsList.next(groupedArr);
-        } else {
-            this.returnsList.next([]);
-        }
+        //     const groupedArr = Object.values(grouped);
+        //     //this.returnsList.next(groupedArr);
+        // } else {
+        //    // this.returnsList.next([]);
+        // }
     }
 
     // Refreshes All Data
@@ -360,4 +361,24 @@ export class StorageService {
         await Promise.all([this.loadHomePageData(), this.loadReturnsData()]);
         this.isDatabaseReady.next(true);
     }
+
+    async getFrequencies() {
+        const result: frequency[] = (await this.db.query('SELECT * FROM freq')).values as frequency[];
+        if (result.length > 0) {
+            return result;
+        } else {
+            return null;
+        }
+    }
+
+    async getSales() {
+        const result: inventory[] = (await this.db.query('SELECT * FROM inv')).values as inventory[];
+        if (result.length > 0) {
+            return result;
+        } else {
+            return null;
+        }
+    }
+    
+
 }
